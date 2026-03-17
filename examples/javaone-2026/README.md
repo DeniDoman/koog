@@ -4,6 +4,8 @@ This project is a **JavaOne conference example** created to demonstrate how to u
 
 While Koog is often discussed in broader JVM contexts, this sample focuses specifically on a straightforward **Java-first developer experience**. The goal is to show that since v0.7 Koog can be used naturally in a Java application without requiring Kotlin as the primary language of the project.
 
+> Hint: the agent strategy is here: [KoogAgentService.java](https://github.com/JetBrains/koog/blob/develop/examples/javaone-2026/src/main/java/org/example/koog/java/agents/KoogAgentService.java)
+
 ## What this project showcases
 
 - Using **Koog** in a **Java** application with the new **native Java API** API
