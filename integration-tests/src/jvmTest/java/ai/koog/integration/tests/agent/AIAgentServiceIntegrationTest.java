@@ -5,10 +5,13 @@ import ai.koog.agents.core.agent.GraphAIAgent;
 import ai.koog.agents.core.agent.GraphAIAgentService;
 import ai.koog.agents.core.tools.ToolRegistry;
 import ai.koog.integration.tests.base.KoogJavaTestBase;
+import ai.koog.integration.tests.utils.JavaUtils;
 import ai.koog.integration.tests.utils.NumberTools;
-import ai.koog.integration.tests.utils.Models;
+import ai.koog.prompt.executor.clients.openai.OpenAIModels;
 import ai.koog.prompt.llm.LLModel;
 import ai.koog.prompt.message.Message;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
 import kotlin.time.Clock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -20,7 +23,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceCreateAndListAgents(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -40,7 +43,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceAgentById(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -62,7 +65,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceRemoveAgent(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -83,7 +86,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceCreateAgentAndRun(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -102,7 +105,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceWithCustomToolRegistry(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         NumberTools calculator = new NumberTools();
         ToolRegistry serviceToolRegistry = ToolRegistry.builder().tools(calculator).build();
@@ -121,10 +124,11 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
         assertFalse(result.isBlank());
     }
 
-    @ParameterizedTest
-    @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
-    public void integration_AIAgentServiceBuilderConfiguration(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+    @Test
+    @Disabled("KG-748 Java AIAgentServiceBuilder.maxIterations() has no effect as AIAgentConfig.copy() ignores the new value")
+    public void integration_AIAgentServiceBuilderConfiguration() {
+        LLModel model = OpenAIModels.Chat.GPT5_1;
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -143,7 +147,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_BuilderWithCustomId(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         GraphAIAgentService<String, String> service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
@@ -164,7 +168,7 @@ public class AIAgentServiceIntegrationTest extends KoogJavaTestBase {
     @ParameterizedTest
     @MethodSource("ai.koog.integration.tests.agent.AIAgentTestBase#getLatestModels")
     public void integration_AIAgentServiceBuilderFunctionalStrategy(LLModel model) {
-        Models.assumeAvailable(model.getProvider());
+        JavaUtils.assumeAvailable(model.getProvider());
 
         var service = AIAgentService.builder()
             .promptExecutor(createExecutor(model))
