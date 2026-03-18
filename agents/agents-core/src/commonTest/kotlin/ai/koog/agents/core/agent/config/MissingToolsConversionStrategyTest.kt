@@ -7,6 +7,7 @@ import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.message.ResponseMetaInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant.Companion.fromEpochMilliseconds
@@ -212,6 +213,72 @@ class MissingToolsConversionStrategyTest {
 
         assertTrue(allStrategyResult.messages.isEmpty())
         assertTrue(missingStrategyResult.messages.isEmpty())
+    }
+
+    /**
+     * Regression test for https://github.com/DeniDoman/koog/issues/4
+     *
+     * On Kotlin/Native (iOS), `Message.Tool.Call.contentJsonResult` used `by lazy {}` with a
+     * `kotlin.Result<JsonObject>` return type. Since `kotlin.Result` is a value/inline class,
+     * its interaction with `SynchronizedLazyImpl` on Kotlin/Native caused crashes when accessing
+     * the underlying `JsonObject` (specifically at `HashMap#<get-entries>()`).
+     *
+     * Additionally, since `by lazy {}` is not a data property, calling `copy()` on a
+     * `Message.Tool.Call` produced a new instance with an uninitialized lazy delegate.
+     * When the `Missing` conversion strategy later called `describeToolCall()` on that copy
+     * (which accesses `contentJsonResult`), it would re-trigger lazy init and crash on iOS.
+     *
+     * The fix replaces `by lazy {}` with eager initialization, so `contentJsonResult` is always
+     * computed at construction time, including after `copy()`.
+     */
+    @Test
+    fun testContentJsonResultAccessibleAfterCopy() {
+        // Simulate what happens when token counts are updated: a copy is made with new metaInfo
+        val copiedToolCall = testToolCall.copy(metaInfo = ResponseMetaInfo.Empty)
+
+        // contentJsonResult must be accessible on the copy — this crashed on Kotlin/Native before the fix
+        assertTrue(copiedToolCall.contentJsonResult.isSuccess)
+        assertNotNull(copiedToolCall.contentJsonResult.getOrNull())
+        assertEquals(
+            testToolCall.contentJsonResult.getOrThrow(),
+            copiedToolCall.contentJsonResult.getOrThrow()
+        )
+    }
+
+    @Test
+    fun testConvertMessageWithCopiedToolCall() {
+        // Regression: describeToolCall() on a copied Message.Tool.Call crashed on Kotlin/Native
+        // because contentJsonResult used `by lazy {}`, which is not preserved across copy().
+        val copiedToolCall = testToolCall.copy(metaInfo = ResponseMetaInfo.Empty)
+
+        val result = allStrategy.convertMessage(copiedToolCall)
+        val expectedContent =
+            "{\"tool_call_id\":\"test-call-id\",\"tool_name\":\"test-tool\",\"tool_args\":{\"param\":\"value\"}}"
+
+        assertEquals(expectedContent, result.content)
+    }
+
+    @Test
+    fun testMissingStrategyConvertPromptWithCopiedToolCallAndEmptyTools() {
+        // Regression: simulates the nodeLLMRequest -> nodeExecuteTool -> nodeLLMRequestStructured
+        // flow where requestLLMStructured calls preparePrompt(prompt, emptyList()), which triggers
+        // the Missing strategy to convert all tool calls (including copies) via describeToolCall().
+        val copiedToolCall = testToolCall.copy(metaInfo = ResponseMetaInfo.Empty)
+        val testPrompt = prompt("test-prompt") {
+            user("User message")
+            tool {
+                call(copiedToolCall)
+            }
+        }
+
+        // With empty tools, all tool calls are "missing" and get converted
+        val result = missingStrategy.convertPrompt(testPrompt, emptyList())
+        val messages = result.messages
+
+        assertTrue(messages[1] is Message.Assistant)
+        val expectedContent =
+            "{\"tool_call_id\":\"test-call-id\",\"tool_name\":\"test-tool\",\"tool_args\":{\"param\":\"value\"}}"
+        assertEquals(expectedContent, messages[1].content)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package ai.koog.prompt.message
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -256,12 +257,17 @@ public sealed interface Message {
                 this(id, tool, ContentPart.Text(content), metaInfo)
 
             /**
-             * Lazily parses and caches the result of parsing [content] as a JSON object.
+             * Parses [content] as a JSON object, eagerly computed at construction time.
+             *
+             * Note: Using `by lazy {}` here causes crashes on Kotlin/Native (iOS) because
+             * `kotlin.Result<T>` (a value/inline class) does not work correctly with
+             * `SynchronizedLazyImpl` on Kotlin/Native targets. The lazy delegate is also
+             * not preserved on `copy()`, leading to unnecessary re-computation.
              */
             // TODO remove?
-            val contentJsonResult: kotlin.Result<JsonObject> by lazy {
+            @Transient
+            val contentJsonResult: kotlin.Result<JsonObject> =
                 runCatching { Json.parseToJsonElement(content).jsonObject }
-            }
 
             /**
              * Lazily parses the content of the tool call as a JSON object.
