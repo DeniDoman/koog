@@ -251,6 +251,67 @@ class DeepSeekLLMClientTest {
         assertTrue(ex.message!!.contains("Moderation is not supported"))
     }
 
+    // Reproduces: https://github.com/JetBrains/koog/issues/1589
+    // DeepSeek (and other OpenAI-compatible providers) may return a choice with both
+    // `content` and `tool_calls`. Previously only the tool calls were returned and the
+    // content was silently dropped.
+    @Test
+    fun testExecuteWithContentAndToolCalls() = runTest {
+        //language=json
+        val bodyWithContentAndToolCalls = """
+            {
+              "id": "chatcmpl-content-and-tool",
+              "object": "chat.completion",
+              "created": 1716920005,
+              "system_fingerprint": "dummy",
+              "model": "deepseek-chat",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "I'll call the search tool to find the answer.",
+                    "tool_calls": [
+                      {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                          "name": "search",
+                          "arguments": "{\"query\": \"Kotlin\"}"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": "tool_calls"
+                }
+              ],
+              "usage": {"total_tokens": 30, "prompt_tokens": 15, "completion_tokens": 15}
+            }
+        """.trimIndent()
+
+        val engine = MockEngine { _ ->
+            respond(
+                content = bodyWithContentAndToolCalls,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, Json.toString())
+            )
+        }
+        val http = HttpClient(engine) {}
+        val client = DeepSeekLLMClient(apiKey = key, baseClient = http, clock = FixedClock)
+        val prompt = Prompt.build(id = "p-content-tool", clock = FixedClock) { user("Search for Kotlin") }
+
+        val responses = client.execute(prompt, DeepSeekModels.DeepSeekChat)
+
+        assertEquals(2, responses.size, "Should return both the assistant content message and the tool call")
+        val assistantMsg = responses[0]
+        assertIs<Message.Assistant>(assistantMsg, "First response should be the assistant text content")
+        assertEquals("I'll call the search tool to find the answer.", assistantMsg.content)
+        val toolCall = responses[1]
+        assertIs<Message.Tool.Call>(toolCall, "Second response should be the tool call")
+        assertEquals("search", toolCall.tool)
+        assertEquals("{\"query\": \"Kotlin\"}", toolCall.content)
+    }
+
     @Test
     fun testResponseUsage() = runTest {
         val engine = MockEngine { _ ->

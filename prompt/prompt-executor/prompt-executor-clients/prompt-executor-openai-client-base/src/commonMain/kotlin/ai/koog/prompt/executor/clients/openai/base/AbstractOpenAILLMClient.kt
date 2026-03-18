@@ -400,19 +400,29 @@ public abstract class AbstractOpenAILLMClient<TResponse : OpenAIBaseLLMResponse,
     ): List<Message.Response> {
         return when {
             this is OpenAIMessage.Assistant && !this.toolCalls.isNullOrEmpty() -> {
-                this.toolCalls.map { toolCall ->
-                    Message.Tool.Call(
-                        id = toolCall.id,
-                        tool = toolCall.function.name,
-                        /*
-                         If the tool has no arguments, OpenRouter puts an empty string in the arguments instead of an empty object
-                         But we always expect arguments to be a JSON object. Fixing this.
-                         */
-                        content = toolCall.function.arguments
-                            .takeIf { it.isNotEmpty() }
-                            ?: "{}",
-                        metaInfo = metaInfo
-                    )
+                buildList {
+                    // Some providers (e.g. DeepSeek) may return both content and toolCalls in the same response.
+                    // Include any text content before the tool calls to avoid context loss.
+                    this@toMessageResponses.reasoningContent?.let { reasoning ->
+                        add(Message.Reasoning(content = reasoning, metaInfo = metaInfo))
+                    }
+                    this@toMessageResponses.content?.text()?.takeIf { it.isNotEmpty() }?.let { text ->
+                        add(Message.Assistant(content = text, finishReason = finishReason, metaInfo = metaInfo))
+                    }
+                    addAll(this@toMessageResponses.toolCalls.map { toolCall ->
+                        Message.Tool.Call(
+                            id = toolCall.id,
+                            tool = toolCall.function.name,
+                            /*
+                             If the tool has no arguments, OpenRouter puts an empty string in the arguments instead of an empty object
+                             But we always expect arguments to be a JSON object. Fixing this.
+                             */
+                            content = toolCall.function.arguments
+                                .takeIf { it.isNotEmpty() }
+                                ?: "{}",
+                            metaInfo = metaInfo
+                        )
+                    })
                 }
             }
 
