@@ -87,7 +87,10 @@ private fun Message.User.toOllamaChatMessage(model: LLModel): OllamaChatMessageD
 
                         is AttachmentContent.Binary -> actualContent.asBase64()
 
-                        else -> throw IllegalArgumentException("Unsupported file attachment content: ${content::class}")
+                        is AttachmentContent.URL -> throw IllegalArgumentException(
+                            "Ollama does not support URL-based file attachments. " +
+                                "Use textFile() or binaryFile() to provide the file content directly."
+                        )
                     }
 
                     text.append("\n\n$fileContent")
