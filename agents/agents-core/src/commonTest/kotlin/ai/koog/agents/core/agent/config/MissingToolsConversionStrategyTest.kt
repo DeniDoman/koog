@@ -230,6 +230,81 @@ class MissingToolsConversionStrategyTest {
         assertEquals(expectedContent, result.content)
     }
 
+    /**
+     * Regression test for https://github.com/DeniDoman/koog/issues/4
+     *
+     * Reproduces the crash on iOS/Native where HashMap.entries crashes after a tool call
+     * when the prompt is prepared for a structured LLM request. The flow is:
+     * 1. nodeLLMRequest returns a tool call → tool call added to prompt
+     * 2. nodeExecuteTool accesses contentJson to parse tool args (initializes lazy cache)
+     * 3. nodeLLMRequestStructured calls preparePrompt with empty tools →
+     *    MissingToolsConversionStrategy converts the tool call via describeToolCall →
+     *    accesses contentJsonResult again → serializes the cached JsonObject →
+     *    iterates over HashMap.entries → CRASH on Kotlin/Native
+     *
+     * The root cause was that contentJsonResult used kotlin.Result<JsonObject> in a lazy
+     * delegate. The inline class boxing in Lazy<Any?> corrupted the HashMap backing the
+     * JsonObject on Kotlin/Native.
+     */
+    @Test
+    fun testContentJsonAccessThenDescribeToolCallDoesNotCrash() {
+        val toolCall = Message.Tool.Call(
+            id = "call-123",
+            tool = "PlacesAdministrativeTool",
+            content = """{"placeName": "Chennai"}""",
+            metaInfo = ResponseMetaInfo.create(testClock)
+        )
+
+        // Step 1: Access contentJson (simulates tool execution in nodeExecuteTool)
+        val jsonObject = toolCall.contentJson
+        assertEquals("Chennai", jsonObject["placeName"].toString().trim('"'))
+
+        // Step 2: Access contentJsonResult again via describeToolCall
+        // (simulates MissingToolsConversionStrategy converting tool call for structured request)
+        val described = allStrategy.convertMessage(toolCall)
+        assertTrue(described is Message.Assistant)
+        assertTrue(described.content.contains("\"tool_args\""))
+        assertTrue(described.content.contains("\"placeName\""))
+        assertTrue(described.content.contains("Chennai"))
+    }
+
+    /**
+     * Same regression test but exercised through the full MissingToolsConversionStrategy.Missing
+     * flow with empty tools (as happens in requestLLMStructured).
+     */
+    @Test
+    fun testMissingStrategyWithPriorContentJsonAccessDoesNotCrash() {
+        val toolCall = Message.Tool.Call(
+            id = "call-456",
+            tool = "PlacesAdministrativeTool",
+            content = """{"placeName": "Tokyo Prefecture"}""",
+            metaInfo = ResponseMetaInfo.create(testClock)
+        )
+
+        // Simulate tool execution accessing contentJson
+        val jsonObject = toolCall.contentJson
+        assertEquals("Tokyo Prefecture", jsonObject["placeName"].toString().trim('"'))
+
+        // Build a prompt that mimics the state after nodeLLMRequest + nodeExecuteTool
+        val testPrompt = prompt("test-prompt") {
+            user("Find sub-places")
+            message(toolCall) // Tool call from LLM response
+            user("""{"administrative_area_level_1": "Tokyo"}""") // Tool result added as user message
+        }
+
+        // Simulate requestLLMStructured calling preparePrompt with empty tools
+        val result = missingStrategy.convertPrompt(testPrompt, emptyList())
+        val messages = result.messages
+
+        assertEquals(3, messages.size)
+        // Tool call should be converted to Assistant message
+        assertTrue(messages[1] is Message.Assistant, "Tool call should be converted to Assistant")
+        assertTrue(messages[1].content.contains("PlacesAdministrativeTool"))
+        assertTrue(messages[1].content.contains("Tokyo Prefecture"))
+        // User message should remain unchanged
+        assertTrue(messages[2] is Message.User)
+    }
+
     @Test
     fun testNullIdToolResult() {
         val nullIdToolResult = Message.Tool.Result(

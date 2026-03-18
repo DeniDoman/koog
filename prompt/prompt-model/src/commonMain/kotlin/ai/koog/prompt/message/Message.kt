@@ -255,19 +255,35 @@ public sealed interface Message {
             public constructor(id: String?, tool: String, content: String, metaInfo: ResponseMetaInfo) :
                 this(id, tool, ContentPart.Text(content), metaInfo)
 
+            // Store parsed JSON as Any? (JsonObject on success, Throwable on failure)
+            // to avoid kotlin.Result inline class boxing issues in Lazy<Any?> on Kotlin/Native.
+            // Storing kotlin.Result directly in a lazy delegate can corrupt the backing HashMap
+            // reference of the parsed JsonObject on iOS/Native, causing crashes in HashMap.entries.
+            private val _contentJsonCache: Any? by lazy {
+                try {
+                    Json.parseToJsonElement(content).jsonObject
+                } catch (e: Throwable) {
+                    e
+                }
+            }
+
             /**
              * Lazily parses and caches the result of parsing [content] as a JSON object.
              */
-            // TODO remove?
-            val contentJsonResult: kotlin.Result<JsonObject> by lazy {
-                runCatching { Json.parseToJsonElement(content).jsonObject }
-            }
+            val contentJsonResult: kotlin.Result<JsonObject>
+                get() {
+                    val cached = _contentJsonCache
+                    return if (cached is JsonObject) {
+                        kotlin.Result.success(cached)
+                    } else {
+                        kotlin.Result.failure(cached as? Throwable ?: IllegalStateException("Failed to parse content as JSON"))
+                    }
+                }
 
             /**
              * Lazily parses the content of the tool call as a JSON object.
              * Can throw an exception when parsing fails.
              */
-            // TODO make it JSONObject instead?
             val contentJson: JsonObject
                 get() = contentJsonResult.getOrThrow()
 
