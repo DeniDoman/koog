@@ -27,6 +27,8 @@ import ai.koog.agents.memory.model.MemoryScope
 import ai.koog.agents.memory.model.MemorySubject
 import ai.koog.agents.memory.model.MultipleFacts
 import ai.koog.agents.memory.model.SingleFact
+import ai.koog.agents.memory.model.TokenBudget
+import ai.koog.agents.memory.model.estimateTokens
 import ai.koog.agents.memory.prompts.MemoryPrompts
 import ai.koog.agents.memory.providers.AgentMemoryProvider
 import ai.koog.agents.memory.providers.NoMemory
@@ -302,6 +304,8 @@ public class AgentMemory(
      * @param concept The concept to load facts about
      * @param scopes List of memory scopes to search in (Agent, Feature, etc.). By default all scopes are used.
      * @param subjects List of subjects to search in (User, Project, etc.). By default all registered subjects are used.
+     * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens
+     *                    injected into the prompt. By default there is no limit (backwards-compatible).
      */
     @OptIn(InternalAgentsApi::class)
     public suspend fun loadFactsToAgent(
@@ -309,7 +313,8 @@ public class AgentMemory(
         concept: Concept,
         scopes: List<MemoryScopeType> = MemoryScopeType.entries,
         subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects) { subject, scope ->
+        tokenBudget: TokenBudget = TokenBudget.Unlimited,
+    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, tokenBudget) { subject, scope ->
         agentMemory.load(concept, subject, scope)
     }
 
@@ -332,12 +337,15 @@ public class AgentMemory(
      * @param llm Current LLM context to interact with the agent's chat history.
      * @param scopes List of memory scopes to search in (Agent, Feature, etc.). By default all scopes are used.
      * @param subjects List of subjects to search in (User, Project, etc.). By default all registered subjects are used.
+     * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens
+     *                    injected into the prompt. By default there is no limit (backwards-compatible).
      */
     public suspend fun loadAllFactsToAgent(
         llm: AIAgentLLMContext,
         scopes: List<MemoryScopeType> = MemoryScopeType.entries,
         subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, agentMemory::loadAll)
+        tokenBudget: TokenBudget = TokenBudget.Unlimited,
+    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, tokenBudget, agentMemory::loadAll)
 
     /**
      * Implementation method for loading facts from memory and adding them to the LLM chat history.
@@ -352,12 +360,14 @@ public class AgentMemory(
      * @param llm Current LLM context to interact with the agent's chat history
      * @param scopes List of memory scopes to search in
      * @param subjects List of subjects to search in
+     * @param tokenBudget Budget that caps the number of facts and/or approximate tokens injected
      * @param loadFacts Function that loads facts for a given subject and scope
      */
     private suspend fun loadFactsToAgentImpl(
         llm: AIAgentLLMContext,
         scopes: List<MemoryScopeType>,
         subjects: List<MemorySubject>,
+        tokenBudget: TokenBudget = TokenBudget.Unlimited,
         loadFacts: suspend (subject: MemorySubject, scope: MemoryScope) -> List<Fact>
     ) {
         // Load facts for all matching scopes
@@ -407,9 +417,12 @@ public class AgentMemory(
         // Add the most specific single facts to the result
         facts.addAll(singleFactsByKeyword.values.map { it.second })
 
-        val factsByConcept = facts.groupBy { it.concept }
+        // Apply token budget: prefer newer facts (higher timestamp) when trimming
+        val budgetedFacts = applyTokenBudget(facts, tokenBudget)
 
-        logger.info { "Found ${facts.size} facts for ${factsByConcept.size} concepts" }
+        val factsByConcept = budgetedFacts.groupBy { it.concept }
+
+        logger.info { "Found ${budgetedFacts.size} facts for ${factsByConcept.size} concepts (before budget: ${facts.size})" }
 
         // Add facts to LLM chat history
         if (factsByConcept.isNotEmpty()) {
@@ -440,8 +453,79 @@ public class AgentMemory(
                     logger.info { "Prompt updated" }
                 }
             }
-            logger.info { "Loaded ${facts.size} facts into LLM memory" }
+            logger.info { "Loaded ${budgetedFacts.size} facts into LLM memory" }
         }
+    }
+
+    /**
+     * Applies the token budget to a list of facts.
+     *
+     * Facts are sorted by timestamp descending (newest first) so that the most recent
+     * facts are preferred when the budget is exhausted. Both [TokenBudget.maxFacts] and
+     * [TokenBudget.maxTokens] are respected independently — whichever limit is hit first
+     * stops inclusion of further facts.
+     *
+     * For [MultipleFacts], individual values within a single fact entry are also trimmed
+     * to stay within the token budget.
+     */
+    internal fun applyTokenBudget(facts: List<Fact>, budget: TokenBudget): List<Fact> {
+        if (budget.maxFacts == null && budget.maxTokens == null) return facts
+
+        // Sort newest-first so we prefer recent facts
+        val sorted = facts.sortedByDescending { it.timestamp }
+
+        val result = mutableListOf<Fact>()
+        var factCount = 0
+        var tokenCount = 0
+
+        for (fact in sorted) {
+            if (budget.maxFacts != null && factCount >= budget.maxFacts) break
+
+            when (fact) {
+                is SingleFact -> {
+                    val tokens = fact.value.estimateTokens() + fact.concept.keyword.estimateTokens()
+                    if (budget.maxTokens != null && tokenCount + tokens > budget.maxTokens && result.isNotEmpty()) {
+                        break
+                    }
+                    result.add(fact)
+                    factCount++
+                    tokenCount += tokens
+                }
+
+                is MultipleFacts -> {
+                    if (budget.maxTokens != null) {
+                        // Include as many values as fit within the token budget
+                        val includedValues = mutableListOf<String>()
+                        val headerTokens = fact.concept.keyword.estimateTokens()
+                        var entryTokens = headerTokens
+
+                        for (value in fact.values) {
+                            val valueTokens = value.estimateTokens()
+                            if (tokenCount + entryTokens + valueTokens > budget.maxTokens && includedValues.isNotEmpty()) {
+                                break
+                            }
+                            includedValues.add(value)
+                            entryTokens += valueTokens
+                        }
+
+                        if (includedValues.isNotEmpty()) {
+                            result.add(fact.copy(values = includedValues))
+                            factCount++
+                            tokenCount += entryTokens
+                        }
+                    } else {
+                        result.add(fact)
+                        factCount++
+                    }
+                }
+            }
+        }
+
+        if (result.size < facts.size) {
+            logger.info { "Token budget trimmed facts from ${facts.size} to ${result.size} (budget: $budget)" }
+        }
+
+        return result
     }
 }
 

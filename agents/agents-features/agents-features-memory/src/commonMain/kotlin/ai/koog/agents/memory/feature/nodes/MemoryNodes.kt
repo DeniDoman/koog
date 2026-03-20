@@ -12,6 +12,7 @@ import ai.koog.agents.memory.model.FactType
 import ai.koog.agents.memory.model.MemorySubject
 import ai.koog.agents.memory.model.MultipleFacts
 import ai.koog.agents.memory.model.SingleFact
+import ai.koog.agents.memory.model.TokenBudget
 import ai.koog.agents.memory.prompts.MemoryPrompts
 import ai.koog.prompt.llm.LLModel
 import kotlinx.serialization.Serializable
@@ -28,14 +29,16 @@ import kotlin.time.Clock
  * @param subject The subject scope of the memory (USER, PROJECT, etc.)
  * @param scope The scope of the memory (Agent, Feature, etc.)
  * @param concept A concept to load facts for
+ * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens injected into the prompt
  */
 @AIAgentBuilderDslMarker
 public inline fun <reified T> nodeLoadFromMemory(
     name: String? = null,
     concept: Concept,
     subject: MemorySubject,
-    scope: MemoryScopeType = MemoryScopeType.AGENT
-): AIAgentNodeDelegate<T, T> = nodeLoadFromMemory(name, listOf(concept), listOf(subject), listOf(scope))
+    scope: MemoryScopeType = MemoryScopeType.AGENT,
+    tokenBudget: TokenBudget = TokenBudget.Unlimited
+): AIAgentNodeDelegate<T, T> = nodeLoadFromMemory(name, listOf(concept), listOf(subject), listOf(scope), tokenBudget)
 
 /**
  * Node that loads facts from memory for a given concept
@@ -43,14 +46,16 @@ public inline fun <reified T> nodeLoadFromMemory(
  * @param subject The subject scope of the memory (USER, PROJECT, etc.)
  * @param scope The scope of the memory (Agent, Feature, etc.)
  * @param concepts A list of concepts to load facts for
+ * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens injected into the prompt
  */
 @AIAgentBuilderDslMarker
 public inline fun <reified T> nodeLoadFromMemory(
     name: String? = null,
     concepts: List<Concept>,
     subject: MemorySubject,
-    scope: MemoryScopeType = MemoryScopeType.AGENT
-): AIAgentNodeDelegate<T, T> = nodeLoadFromMemory(name, concepts, listOf(subject), listOf(scope))
+    scope: MemoryScopeType = MemoryScopeType.AGENT,
+    tokenBudget: TokenBudget = TokenBudget.Unlimited
+): AIAgentNodeDelegate<T, T> = nodeLoadFromMemory(name, concepts, listOf(subject), listOf(scope), tokenBudget)
 
 /**
  * Node that loads facts from memory for a given concept
@@ -58,6 +63,7 @@ public inline fun <reified T> nodeLoadFromMemory(
  * @param concepts A list of concepts to load facts for
  * @param scopes List of memory scopes (Agent, Feature, etc.). By default all scopes would be chosen
  * @param subjects List of subjects (user, project, organization, etc.) to look for. By default all subjects would be chosen
+ * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens injected into the prompt
  */
 @OptIn(InternalAgentsApi::class)
 @AIAgentBuilderDslMarker
@@ -65,11 +71,12 @@ public inline fun <reified T> nodeLoadFromMemory(
     name: String? = null,
     concepts: List<Concept>,
     subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    scopes: List<MemoryScopeType> = MemoryScopeType.entries
+    scopes: List<MemoryScopeType> = MemoryScopeType.entries,
+    tokenBudget: TokenBudget = TokenBudget.Unlimited
 ): AIAgentNodeDelegate<T, T> = node(name) { input ->
     withMemory {
         concepts.forEach { concept ->
-            loadFactsToAgent(llm, concept, scopes, subjects)
+            loadFactsToAgent(llm, concept, scopes, subjects, tokenBudget)
         }
     }
 
@@ -81,16 +88,18 @@ public inline fun <reified T> nodeLoadFromMemory(
  *
  * @param scopes List of memory scopes (Agent, Feature, etc.). By default only Agent scope would be chosen
  * @param subjects List of subjects (user, project, organization, etc.) to look for.
+ * @param tokenBudget Optional budget that caps the number of facts and/or approximate tokens injected into the prompt
  */
 @OptIn(InternalAgentsApi::class)
 @AIAgentBuilderDslMarker
 public inline fun <reified T> nodeLoadAllFactsFromMemory(
     name: String? = null,
     subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    scopes: List<MemoryScopeType> = MemoryScopeType.entries
+    scopes: List<MemoryScopeType> = MemoryScopeType.entries,
+    tokenBudget: TokenBudget = TokenBudget.Unlimited
 ): AIAgentNodeDelegate<T, T> = node(name) { input ->
     withMemory {
-        loadAllFactsToAgent(llm, scopes, subjects)
+        loadAllFactsToAgent(llm, scopes, subjects, tokenBudget)
     }
 
     input
