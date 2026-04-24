@@ -289,7 +289,7 @@ public class OllamaClient @JvmOverloads constructor(
                     content = content,
                     metaInfo = responseMetadata
                 )
-                listOf(assistantMessage) + toolCallMessages
+                toolCallMessages + listOf(assistantMessage)
             }
         }
     }
