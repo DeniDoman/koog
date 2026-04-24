@@ -294,7 +294,8 @@ public class AgentMemory(
      * memory.loadFactsToAgent(
      *     concept = Concept("preferred-language", "User's preferred programming language"),
      *     scopes = listOf(MemoryScopeType.PRODUCT, MemoryScopeType.AGENT),
-     *     subjects = listOf(MemorySubjects.User)
+     *     subjects = listOf(MemorySubjects.User),
+     *     maxFacts = 20
      * )
      * ```
      *
@@ -302,6 +303,8 @@ public class AgentMemory(
      * @param concept The concept to load facts about
      * @param scopes List of memory scopes to search in (Agent, Feature, etc.). By default all scopes are used.
      * @param subjects List of subjects to search in (User, Project, etc.). By default all registered subjects are used.
+     * @param maxFacts Maximum number of facts to inject into the prompt. Defaults to [Int.MAX_VALUE] (no limit).
+     *                 Use this to prevent context window overflow when memory grows large across many sessions.
      */
     @OptIn(InternalAgentsApi::class)
     public suspend fun loadFactsToAgent(
@@ -309,7 +312,8 @@ public class AgentMemory(
         concept: Concept,
         scopes: List<MemoryScopeType> = MemoryScopeType.entries,
         subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects) { subject, scope ->
+        maxFacts: Int = Int.MAX_VALUE,
+    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, maxFacts) { subject, scope ->
         agentMemory.load(concept, subject, scope)
     }
 
@@ -325,19 +329,23 @@ public class AgentMemory(
      * // Load all project-related facts from the product scope
      * memory.loadAllFactsToAgent(
      *     scopes = listOf(MemoryScopeType.PRODUCT),
-     *     subjects = listOf(MemorySubjects.Project)
+     *     subjects = listOf(MemorySubjects.Project),
+     *     maxFacts = 50
      * )
      * ```
      *
      * @param llm Current LLM context to interact with the agent's chat history.
      * @param scopes List of memory scopes to search in (Agent, Feature, etc.). By default all scopes are used.
      * @param subjects List of subjects to search in (User, Project, etc.). By default all registered subjects are used.
+     * @param maxFacts Maximum number of facts to inject into the prompt. Defaults to [Int.MAX_VALUE] (no limit).
+     *                 Use this to prevent context window overflow when memory grows large across many sessions.
      */
     public suspend fun loadAllFactsToAgent(
         llm: AIAgentLLMContext,
         scopes: List<MemoryScopeType> = MemoryScopeType.entries,
         subjects: List<MemorySubject> = MemorySubject.registeredSubjects,
-    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, agentMemory::loadAll)
+        maxFacts: Int = Int.MAX_VALUE,
+    ): Unit = loadFactsToAgentImpl(llm, scopes, subjects, maxFacts, agentMemory::loadAll)
 
     /**
      * Implementation method for loading facts from memory and adding them to the LLM chat history.
@@ -352,12 +360,14 @@ public class AgentMemory(
      * @param llm Current LLM context to interact with the agent's chat history
      * @param scopes List of memory scopes to search in
      * @param subjects List of subjects to search in
+     * @param maxFacts Maximum number of facts to inject into the prompt
      * @param loadFacts Function that loads facts for a given subject and scope
      */
     private suspend fun loadFactsToAgentImpl(
         llm: AIAgentLLMContext,
         scopes: List<MemoryScopeType>,
         subjects: List<MemorySubject>,
+        maxFacts: Int,
         loadFacts: suspend (subject: MemorySubject, scope: MemoryScope) -> List<Fact>
     ) {
         // Load facts for all matching scopes
@@ -407,9 +417,16 @@ public class AgentMemory(
         // Add the most specific single facts to the result
         facts.addAll(singleFactsByKeyword.values.map { it.second })
 
-        val factsByConcept = facts.groupBy { it.concept }
+        val limitedFacts = if (maxFacts < facts.size) {
+            logger.info { "Limiting facts from ${facts.size} to $maxFacts due to maxFacts cap" }
+            facts.take(maxFacts)
+        } else {
+            facts
+        }
 
-        logger.info { "Found ${facts.size} facts for ${factsByConcept.size} concepts" }
+        val factsByConcept = limitedFacts.groupBy { it.concept }
+
+        logger.info { "Found ${limitedFacts.size} facts for ${factsByConcept.size} concepts (${facts.size} total before limit)" }
 
         // Add facts to LLM chat history
         if (factsByConcept.isNotEmpty()) {
@@ -440,7 +457,7 @@ public class AgentMemory(
                     logger.info { "Prompt updated" }
                 }
             }
-            logger.info { "Loaded ${facts.size} facts into LLM memory" }
+            logger.info { "Loaded ${limitedFacts.size} facts into LLM memory" }
         }
     }
 }

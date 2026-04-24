@@ -31,7 +31,9 @@ import ai.koog.serialization.kotlinx.KotlinxSerializer
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
@@ -575,5 +577,68 @@ class AIAgentMemoryTest {
         coVerify {
             memoryProvider.load(concept, any(), any())
         }
+    }
+
+    @Test
+    fun testLoadFactsToAgentRespectsMaxFactsLimit() = runTest {
+        val memoryProvider = mockk<AgentMemoryProvider>()
+
+        // Simulate 20 sessions, each saving a distinct MultipleFacts (different concepts),
+        // reproducing the scenario where facts flood the prompt after many sessions.
+        val totalFacts = 20
+        val manyFacts = (1..totalFacts).map { i ->
+            MultipleFacts(
+                concept = Concept("session-concept-$i", "concept from session $i", FactType.MULTIPLE),
+                values = listOf("value-$i-a", "value-$i-b", "value-$i-c"),
+                timestamp = i.toLong()
+            )
+        }
+
+        // Memory returns all accumulated facts regardless of the query concept
+        coEvery {
+            memoryProvider.load(any(), any(), any())
+        } returns manyFacts
+
+        // Count how many times the LLM prompt is updated (one update per distinct concept after grouping)
+        var writeSessionCallCount = 0
+        val llm = mockk<AIAgentLLMContext> {
+            coEvery {
+                writeSession<Any?>(any())
+            } coAnswers {
+                writeSessionCallCount++
+                val block = firstArg<suspend AIAgentLLMWriteSession.() -> Any?>()
+                val writeSession = mockk<AIAgentLLMWriteSession> {
+                    every { appendPrompt(any()) } just runs
+                }
+                block.invoke(writeSession)
+            }
+        }
+
+        val memory = AgentMemory(
+            agentMemory = memoryProvider,
+            scopesProfile = MemoryScopesProfile(MemoryScopeType.AGENT to "test-agent")
+        )
+        val queryConcept = Concept("query", "query concept", FactType.MULTIPLE)
+
+        // Without a limit, all 20 facts (each with a distinct concept) should produce 20 prompt updates
+        memory.loadFactsToAgent(
+            llm = llm,
+            concept = queryConcept,
+            scopes = listOf(MemoryScopeType.AGENT),
+            subjects = listOf(MemorySubjects.User)
+        )
+        assertEquals(totalFacts, writeSessionCallCount, "Without maxFacts limit, all facts should be loaded")
+
+        // With maxFacts = 5, only 5 facts should be injected into the prompt
+        writeSessionCallCount = 0
+        val maxFacts = 5
+        memory.loadFactsToAgent(
+            llm = llm,
+            concept = queryConcept,
+            scopes = listOf(MemoryScopeType.AGENT),
+            subjects = listOf(MemorySubjects.User),
+            maxFacts = maxFacts
+        )
+        assertEquals(maxFacts, writeSessionCallCount, "With maxFacts=$maxFacts, only $maxFacts facts should be loaded")
     }
 }
