@@ -2,6 +2,7 @@ package ai.koog.http.client.java
 
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.http.client.KoogHttpClientException
+import ai.koog.http.client.mergeHeaders
 import ai.koog.utils.io.SuitableForIO
 import io.github.oshai.kotlinlogging.KLogger
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -10,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
@@ -104,7 +106,7 @@ public class JavaKoogHttpClient internal constructor(
         return "${baseUrl.trimEnd('/')}/${path.trimStart('/')}"
     }
 
-    private fun HttpRequest.Builder.defaultHeaders(): HttpRequest.Builder = apply {
+    private fun HttpRequest.Builder.headers(headers: Map<String, String>): HttpRequest.Builder = apply {
         headers.forEach { (name, value) -> header(name, value) }
     }
 
@@ -115,11 +117,12 @@ public class JavaKoogHttpClient internal constructor(
     override suspend fun <R : Any> get(
         path: String,
         responseType: KClass<R>,
-        parameters: Map<String, String>
+        parameters: Map<String, String>,
+        headers: Map<String, String>
     ): R = withContext(Dispatchers.SuitableForIO) {
         val httpRequest = HttpRequest.newBuilder()
             .uri(buildUri(path, parameters))
-            .defaultHeaders()
+            .headers(mergeHeaders(this@JavaKoogHttpClient.headers, headers))
             .defaultTimeout()
             .GET()
             .build()
@@ -134,16 +137,22 @@ public class JavaKoogHttpClient internal constructor(
         request: T,
         requestBodyType: KClass<T>,
         responseType: KClass<R>,
-        parameters: Map<String, String>
+        parameters: Map<String, String>,
+        headers: Map<String, String>
     ): R = withContext(Dispatchers.SuitableForIO) {
         val requestBody = prepareRequestBody(request, requestBodyType)
 
         val httpRequest = HttpRequest.newBuilder()
             .uri(buildUri(path, parameters))
-            .defaultHeaders()
+            .headers(
+                mergeHeaders(
+                    this@JavaKoogHttpClient.headers,
+                    mapOf("Content-Type" to requestBody.contentType),
+                    headers,
+                )
+            )
             .defaultTimeout()
             .POST(HttpRequest.BodyPublishers.ofString(requestBody.body))
-            .header("Content-Type", requestBody.contentType)
             .build()
 
         val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString())
@@ -158,18 +167,26 @@ public class JavaKoogHttpClient internal constructor(
         dataFilter: (String?) -> Boolean,
         decodeStreamingResponse: (String) -> R,
         processStreamingChunk: (R) -> O?,
-        parameters: Map<String, String>
+        parameters: Map<String, String>,
+        headers: Map<String, String>
     ): Flow<O> = callbackFlow {
         val requestBody = prepareRequestBody(request, requestBodyType)
 
         val httpRequest = HttpRequest.newBuilder()
             .uri(buildUri(path, parameters))
-            .defaultHeaders()
+            .headers(
+                mergeHeaders(
+                    this@JavaKoogHttpClient.headers,
+                    mapOf(
+                        "Content-Type" to requestBody.contentType,
+                        "Accept" to "text/event-stream",
+                        "Cache-Control" to "no-cache",
+                    ),
+                    headers,
+                )
+            )
             .defaultTimeout()
             .POST(HttpRequest.BodyPublishers.ofString(requestBody.body))
-            .header("Content-Type", requestBody.contentType)
-            .header("Accept", "text/event-stream")
-            .header("Cache-Control", "no-cache")
             // Note: "Connection" header is restricted in Java HttpClient and managed automatically
             .build()
 
@@ -236,6 +253,76 @@ public class JavaKoogHttpClient internal constructor(
 
         awaitClose {
             // Cleanup if needed
+        }
+    }
+
+    override fun <T : Any> lines(
+        path: String,
+        request: T,
+        requestBodyType: KClass<T>,
+        parameters: Map<String, String>,
+        headers: Map<String, String>
+    ): Flow<String> = callbackFlow {
+        val requestBody = prepareRequestBody(request, requestBodyType)
+
+        val httpRequest = HttpRequest.newBuilder()
+            .uri(buildUri(path, parameters))
+            .headers(
+                mergeHeaders(
+                    this@JavaKoogHttpClient.headers,
+                    mapOf("Content-Type" to requestBody.contentType),
+                    headers,
+                )
+            )
+            .defaultTimeout()
+            .POST(HttpRequest.BodyPublishers.ofString(requestBody.body))
+            .build()
+
+        val responseFuture = httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofLines())
+        val readerJob = launch(Dispatchers.SuitableForIO) {
+            try {
+                val response = responseFuture.get()
+                if (response.statusCode() !in 200..299) {
+                    close(
+                        KoogHttpClientException(
+                            clientName = clientName,
+                            statusCode = response.statusCode(),
+                        )
+                    )
+                    return@launch
+                }
+
+                logger.debug { "Lines flow opened for $clientName" }
+                response.body().use { lines ->
+                    val iterator = lines.iterator()
+                    while (iterator.hasNext()) {
+                        val line = iterator.next()
+                        if (line.isBlank()) continue
+                        if (trySend(line).isClosed) {
+                            responseFuture.cancel(true)
+                            return@launch
+                        }
+                    }
+                }
+
+                logger.debug { "Lines flow closed for $clientName" }
+                close()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                close(
+                    KoogHttpClientException(
+                        clientName = clientName,
+                        message = "Exception during streaming: ${e.message}",
+                        cause = e
+                    )
+                )
+            }
+        }
+
+        awaitClose {
+            responseFuture.cancel(true)
+            readerJob.cancel()
         }
     }
 
