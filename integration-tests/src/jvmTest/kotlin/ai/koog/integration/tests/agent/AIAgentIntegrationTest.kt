@@ -30,6 +30,7 @@ import ai.koog.agents.features.eventHandler.feature.EventHandlerConfig
 import ai.koog.agents.snapshot.feature.AgentCheckpointData
 import ai.koog.agents.snapshot.feature.GraphCheckpointProperties
 import ai.koog.agents.snapshot.feature.Persistence
+import ai.koog.agents.snapshot.feature.isTombstone
 import ai.koog.agents.snapshot.feature.withPersistence
 import ai.koog.agents.snapshot.providers.InMemoryPersistenceStorageProvider
 import ai.koog.agents.snapshot.providers.file.JVMFilePersistenceStorageProvider
@@ -601,7 +602,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
                     val parent = getLatestCheckpoint(agentContext.agentId)
                     createCheckpointAfterNode(
                         agentContext = agentContext,
-                        nodePath = save,
+                        nodePath = agentContext.executionInfo.path(),
                         lastOutput = input,
                         lastOutputType = typeToken<String>(),
                         version = parent?.version?.plus(1) ?: 0
@@ -710,7 +711,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
                     val parent = getLatestCheckpoint(agentContext.agentId)
                     createCheckpointAfterNode(
                         agentContext = agentContext,
-                        nodePath = save,
+                        nodePath = agentContext.executionInfo.path(),
                         lastOutput = input,
                         lastOutputType = typeToken<String>(),
                         version = parent?.version?.plus(1) ?: 0
@@ -848,7 +849,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
 
         with(checkpointStorageProvider.getCheckpoints(agent.id)) {
             size shouldBeGreaterThanOrEqual 3
-            mapNotNull { (it.properties?.entries?.get("nodePath") as? JSONPrimitive)?.toString() }.toSet() shouldNotBeNull {
+            mapNotNull { it.graphProperties?.nodePath }.toSet() shouldNotBeNull {
                 shouldForAny { it.shouldContain(hello) }
                 shouldForAny { it.shouldContain(world) }
                 shouldForAny { it.shouldContain(bye) }
@@ -928,7 +929,6 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
             edge(finalNode forwardTo nodeFinish)
         }
 
-        @Suppress("DEPRECATION")
         val checkpoint = AgentCheckpointData(
             checkpointId = "last-input-checkpoint",
             createdAt = KoogClock.System.now(),
@@ -938,7 +938,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
             ),
             version = 0,
             graphProperties = GraphCheckpointProperties(
-                nodePath = path(sessionId, strategyName, node2Name),
+                nodePath = path(sessionId, strategyName, node1Name),
                 lastOutput = JSONPrimitive("Node 1 output"),
             ),
         )
@@ -1049,7 +1049,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
                     val parent = getLatestCheckpoint(agentContext.agentId)
                     createCheckpointAfterNode(
                         agentContext = agentContext,
-                        nodePath = bye,
+                        nodePath = agentContext.executionInfo.path(),
                         lastOutput = input,
                         lastOutputType = typeToken<String>(),
                         version = parent?.version?.plus(1) ?: 0
@@ -1085,7 +1085,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
         agent.run(testInput, agent.id)
 
         val expectedNodePath = path(agentId, strategyName, bye)
-        with(fileStorageProvider.getCheckpoints(agent.id).filter { it.graphProperties?.nodePath != "tombstone" }) {
+        with(fileStorageProvider.getCheckpoints(agent.id).filter { !it.isTombstone() }) {
             withClue(incorrectNodeIdError) {
                 shouldNotBeEmpty()
                 first().graphProperties?.nodePath shouldBe expectedNodePath
@@ -1147,7 +1147,7 @@ class AIAgentIntegrationTest : AIAgentTestBase() {
                 }
 
                 withClue("Checkpoint message history should contain a tool call to '${SimpleCalculatorTool.name}'") {
-                    storageProvider.getCheckpoints(agent.id).filter { it.graphProperties?.nodePath != "tombstone" }
+                    storageProvider.getCheckpoints(agent.id).filter { !it.isTombstone() }
                         .shouldNotBeEmpty()
                         .shouldForAny { cp ->
                             cp.messageHistory.any { msg ->
