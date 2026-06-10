@@ -253,6 +253,75 @@ class SingleRunStrategyTests {
     }
 
     @Test
+    fun test_SingleRunStrategy_Streaming_AssistantMessages() = runTest {
+        val actualToolCalls = mutableListOf<String>()
+
+        val testToolRegistry = ToolRegistry {
+            tool(CreateTool)
+        }
+
+        val mockLLMApi = getMockExecutor(serializer) {
+            mockLLMAnswer("Task solved!") onRequestContains "Solve task"
+            mockLLMAnswer("I don't know how to answer that.").asDefaultResponse
+        }
+
+        val agent = AIAgent(
+            mockLLMApi,
+            OllamaModels.Meta.LLAMA_3_2,
+            strategy = singleRunStrategy(stream = true),
+            toolRegistry = testToolRegistry
+        ) {
+            install(EventHandler) {
+                onToolCallStarting { eventContext -> actualToolCalls += eventContext.toolArgs.toString() }
+            }
+        }
+
+        val result = agent.run("Solve task", null)
+
+        assertEquals(0, actualToolCalls.size)
+        assertEquals("Task solved!", result)
+    }
+
+    @Test
+    fun test_SingleRunStrategy_Streaming_WithToolCalls() = runTest {
+        val actualToolCalls = mutableListOf<String>()
+
+        val testToolRegistry = ToolRegistry {
+            tool(CreateTool)
+        }
+
+        val mockLLMApi = getMockExecutor(serializer) {
+            mockLLMAnswer("Hello!") onRequestContains "Hello"
+            mockLLMAnswer("Tools called!") onRequestContains "created"
+            mockLLMAnswer("I don't know how to answer that.").asDefaultResponse
+
+            // Mock LLM tool calls
+            val toolCalls = listOf(
+                CreateTool to CreateTool.Args("solve"),
+                CreateTool to CreateTool.Args("solve2"),
+                CreateTool to CreateTool.Args("solve3"),
+            )
+            mockLLMToolCall(toolCalls) onRequestEquals "Solve task"
+        }
+
+        val agent = AIAgent(
+            mockLLMApi,
+            OllamaModels.Meta.LLAMA_3_2,
+            strategy = singleRunStrategy(stream = true),
+            toolRegistry = testToolRegistry
+        ) {
+            install(EventHandler) {
+                onToolCallStarting { eventContext -> actualToolCalls += eventContext.toolArgs.toString() }
+            }
+        }
+
+        val result = agent.run("Solve task", null)
+
+        assertEquals(3, actualToolCalls.size)
+        assertEquals("Tools called!", result)
+    }
+
+    @Test
     fun test_SingleRunStrategy_Parallel_MixedResults() = runTest {
         val actualToolCalls = mutableListOf<String>()
 

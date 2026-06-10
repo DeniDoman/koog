@@ -249,6 +249,30 @@ derive text chunks via `filterTextOnly()` or collect them with `collectText()`.
 
 You can listen to stream events in [agent event handlers](agent-event-handlers.md).
 
+!!! note
+
+    Streaming events such as `onLLMStreamingFrameReceived` are emitted only while the agent makes a **streaming**
+    LLM request (for example, via a `nodeLLMRequestStreaming` node). The default strategy used by a basic agent
+    (`singleRunStrategy()`) performs regular, non-streaming requests, so these handlers are never invoked for it.
+
+    To get streaming events from a basic agent, enable streaming on the built-in strategy:
+
+    ```kotlin
+    val agent = AIAgent(
+        promptExecutor = executor,
+        llmModel = model,
+        strategy = singleRunStrategy(stream = true),
+    ) {
+        handleEvents {
+            onLLMStreamingFrameReceived { context ->
+                (context.streamFrame as? StreamFrame.TextDelta)?.let { print(it.text) }
+            }
+        }
+    }
+    ```
+
+    Or use a custom strategy with a `nodeLLMRequestStreaming` node, as shown below.
+
 === "Kotlin"
 
     <!--- INCLUDE
