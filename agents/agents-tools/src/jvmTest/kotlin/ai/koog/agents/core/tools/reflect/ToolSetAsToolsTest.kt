@@ -1,5 +1,6 @@
 package ai.koog.agents.core.tools.reflect
 
+import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
@@ -83,6 +84,23 @@ class StringToolsImpl : ToolSet {
 
     // Not marked as a tool, should not be included
     fun uppercase(input: String): String = input.uppercase()
+}
+
+// Two tool sets that declare a method with the same raw name but distinct @Tool(customName = ...)
+class CustomNameToolsA : ToolSet {
+    @Tool(customName = "tool_a_search")
+    @LLMDescription("Searches source A")
+    fun execute(
+        @LLMDescription("Query") query: String
+    ): String = "result A: $query"
+}
+
+class CustomNameToolsB : ToolSet {
+    @Tool(customName = "tool_b_search")
+    @LLMDescription("Searches source B")
+    fun execute(
+        @LLMDescription("Query") query: String
+    ): String = "result B: $query"
 }
 
 @Serializable
@@ -204,6 +222,31 @@ class ToolSetAsToolsTest {
 
         val concatResult = concatTool.execute(concatTool.decodeArgs(concatArgs, serializer))
         assertEquals("\"Hello, World!\"", concatTool.encodeResultToStringUnsafe(concatResult, serializer), "Concat tool should return \"Hello, World!\"")
+    }
+
+    @Test
+    @OptIn(InternalAgentToolsApi::class)
+    fun testCustomNameIsUsedAsToolName() = runTest {
+        val tools = CustomNameToolsA().asTools()
+
+        assertEquals(1, tools.size, "Should have a single tool")
+        assertEquals(
+            "tool_a_search",
+            tools.single().descriptor.name,
+            "Tool name should come from @Tool(customName = ...), not the raw function name"
+        )
+    }
+
+    @Test
+    @OptIn(InternalAgentToolsApi::class)
+    fun testCustomNameAvoidsCollisionForSameMethodName() = runTest {
+        val registry = ToolRegistry {
+            tools(CustomNameToolsA())
+            tools(CustomNameToolsB())
+        }
+
+        assertNotNull(registry.getTool("tool_a_search"), "tool_a_search should be registered")
+        assertNotNull(registry.getTool("tool_b_search"), "tool_b_search should be registered")
     }
 
     @Test
