@@ -2,6 +2,7 @@ package ai.koog.agents.features.eventHandler.feature
 
 import ai.koog.agents.core.agent.AIAgent
 import ai.koog.agents.core.agent.entity.AIAgentGraphStrategy
+import ai.koog.agents.core.agent.singleRunStrategy
 import ai.koog.agents.core.dsl.builder.forwardTo
 import ai.koog.agents.core.dsl.builder.strategy
 import ai.koog.agents.core.dsl.extension.nodeLLMRequestStreaming
@@ -47,6 +48,47 @@ class StreamingEventHandlerTest {
         // Verify the stream frame contains the expected response
         val frameWithContent = streamFrameEvents.firstOrNull { it.contains(assistantResponse) }
         assertTrue(frameWithContent != null, "Stream frame should contain the assistant response")
+    }
+
+    @Test
+    fun `test singleRunStrategy with streaming enabled triggers streaming frame events`() = runTest {
+        // Reproduces the reported issue: a plain agent built with the default-style strategy never emitted
+        // streaming events because singleRunStrategy used a non-streaming LLM request. With stream = true the
+        // strategy must query the LLM via requestLLMStreaming and emit onLLMStreamingFrameReceived events.
+        val userMessage = "Test streaming"
+        val assistantResponse = "Streaming response"
+        val eventsCollector = mockStreaming(
+            strategy = singleRunStrategy(stream = true),
+            buildLlmMock = { mockLLMAnswer(assistantResponse) onRequestContains userMessage }
+        ) { agent ->
+            agent.run(userMessage, null)
+        }
+
+        assertEventsCollected(eventsCollector)
+
+        val streamFrameEvents = eventsCollector.collectedEvents.filter { it.contains("OnLLMStreamingFrameReceived") }
+        assertTrue(streamFrameEvents.isNotEmpty(), "singleRunStrategy(stream = true) should emit OnLLMStreamingFrameReceived events")
+
+        val frameWithContent = streamFrameEvents.firstOrNull { it.contains(assistantResponse) }
+        assertTrue(frameWithContent != null, "Stream frame should contain the assistant response")
+    }
+
+    @Test
+    fun `test singleRunStrategy without streaming does not trigger streaming frame events`() = runTest {
+        // Counterpart of the test above: the default (non-streaming) strategy must not emit streaming events.
+        val userMessage = "Test streaming"
+        val assistantResponse = "Streaming response"
+        val eventsCollector = mockStreaming(
+            strategy = singleRunStrategy(),
+            buildLlmMock = { mockLLMAnswer(assistantResponse) onRequestContains userMessage }
+        ) { agent ->
+            agent.run(userMessage, null)
+        }
+
+        assertEventsCollected(eventsCollector)
+
+        val streamFrameEvents = eventsCollector.collectedEvents.filter { it.contains("OnLLMStreamingFrameReceived") }
+        assertTrue(streamFrameEvents.isEmpty(), "singleRunStrategy() without streaming should not emit OnLLMStreamingFrameReceived events")
     }
 
     @Test
